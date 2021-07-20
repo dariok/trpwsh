@@ -26,6 +26,7 @@ param(
   [switch] $j,
   [switch] $p,
   [switch] $c,
+  [switch] $e,
   [int] $h,
   [int] $from,
   [int] $to,
@@ -239,6 +240,131 @@ if ( $h.length -eq 1 -and $h -gt 0 ) {
     "Waiting for another $wait seconds to allow " + $openJobs.length + " TR jobs to finish"
     Start-Sleep -Seconds $wait
   } while ( $openJobs.length -gt 0 )
+}
+
+########################################################################################################################
+##### PAGE Export and TEI-Konversion
+if ( $e.isPresent ) {
+  $documents | ForEach-Object {
+    $docId = $_.docId
+    $tempPath = "temp/$docId"
+    $exportPath = "export/$docId"
+
+    # create temp dir and dir for exported files
+    New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
+    New-Item -ItemType Directory -Force -Path $exportPath | Out-Null
+
+    # get a list of pages
+    $pagesReq = "https://transkribus.eu/TrpServer/rest/collections/$collection/$docId/fulldoc"
+    Try {
+      $pa = Invoke-RestMethod -Uri $pagesReq -Method Get -WebSession $session
+    } Catch {
+      $pagesReq
+      $_
+      Return
+    }
+    $numPages = $pa.pageList.pages.Count
+  
+    # last modification on server
+    $modifiedServer = ($pa.pageList.pages.tagsStored | Measure-Object -Maximum).Maximum
+  
+    # only export if we do not have the file or the server version is newer
+    if ( 
+         (Test-Path $tempPath) -eq $False -or
+         (Get-ChildItem $tempPath -Filter "*.xml").Length -eq 0 -or
+         (Get-ChildItem $tempPath -Filter "*.xml" | Test-Path -OlderThan $modifiedServer)
+    ) {
+      $req = "https://transkribus.eu/TrpServer/rest/collections/$collection/$docId/export"
+      $exportParams = @{
+        "commonPars"= @{
+          "pages"= "1-$numPages"
+          "doExportDocMetadata"= "false"
+          "doWriteMets"= "true"
+          "doWriteImages"= "false"
+          "doExportPageXml"= "true"
+          "doExportAltoXml"= "false"
+          "doWritePdf"= "false"
+          "doWriteTei"= "true"
+          "doWriteDocx"= "false"
+          "doWriteTxt"= "false"
+          "doWriteTagsXlsx"= "false"
+          "doWriteTagsIob"= "false"
+          "doWriteTablesXlsx"= "false"
+          "doCreateTitle"= "false"
+          "useVersionStatus"= "Latest version"
+          "writeTextOnWordLevel"= "false"
+          "doBlackening"= "false"
+          "selectedTags"= @(
+            "add",
+            "date",
+            "Address",
+            "Antiqua",
+            "supplied",
+            "work",
+            "unclear",
+            "sic",
+            "div",
+            "regionType",
+            "speech",
+            "person",
+            "gap",
+            "organization",
+            "comment",
+            "abbrev",
+            "place"
+          )
+          "font"= "FreeSerif"
+          "splitIntoWordsInAltoXml"= "false"
+          "pageDirName"= "page"
+          "fileNamePattern"= "${filename}"
+          "useHttps"= "true"
+          "remoteImgQuality"= "orig"
+          "doOverwrite"= "true"
+          "useOcrMasterDir"= "true"
+          "exportTranscriptMetadata"= "true"
+        }
+      } | ConvertTo-Json -Depth 3
+      
+      try {
+        $pa = Invoke-RestMethod -Uri $req -Method Post -WebSession $session -Body $exportParams -ContentType application/json
+        
+        $jobreq = "https://transkribus.eu/TrpServer/rest/jobs/$pa"
+        $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
+        
+        while ($jo.state -ne "FINISHED") {
+          "    waiting for export to finish..."
+          Start-Sleep -Seconds 20 
+          $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
+        }
+      
+        # TODO NOTE parameters will be different under Windows (-OutFile)
+        $link = $jo.result
+        "  - downloading and expanding"
+        "    - getting $link"
+        #wget $link -nv -O "temp/temp.zip"
+        Invoke-WebRequest -Uri $link -OutFile "temp/temp.zip"
+        
+        # Force to overwrite log.txt...
+        Expand-Archive "temp/temp.zip" -DestinationPath temp -Force
+        
+        $name = (Get-ChildItem -Path $tempPath -Filter "*.xml").Name
+        $xml = $tempPath + '/' + $name
+        $xml + " (Export: " + $exportPath + ")"
+        
+        # Check whether TEI file is > 0 Bytes; if = 0 Bytes, transform from PAGE
+        If ((Get-Item $xml).length -eq 0kb) {
+          $mets = $tempPath + "/" + $name.Substring(0, 10) + "/mets.xml"
+          java -jar Saxon-HE-9.9.1-2.jar -xsl:page2tei-0.xsl -s:$mets -o:$xml
+        }
+      } catch {
+        "    Error downloading"
+        $req
+        $_
+      }
+    } Else {
+      "  - already up-to-date (last modified on server: $modifiedServer)"
+    }
+  }
 }
 
 
