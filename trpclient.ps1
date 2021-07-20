@@ -245,15 +245,17 @@ if ( $h.length -eq 1 -and $h -gt 0 ) {
 ########################################################################################################################
 ##### PAGE Export and TEI-Konversion
 if ( $e.isPresent ) {
+  $exportPath = "export/$collection"
+  New-Item -ItemType Directory -Force -Path $exportPath | Out-Null
+  $counter = 0
+
   $documents | ForEach-Object {
+    $counter++
     $docId = $_.docId
     $tempPath = "temp/$docId"
-    $exportPath = "export/$docId"
-
-    # create temp dir and dir for exported files
+    
     New-Item -ItemType Directory -Force -Path $tempPath | Out-Null
-    New-Item -ItemType Directory -Force -Path $exportPath | Out-Null
-
+    
     # get a list of pages
     $pagesReq = "https://transkribus.eu/TrpServer/rest/collections/$collection/$docId/fulldoc"
     Try {
@@ -326,24 +328,23 @@ if ( $e.isPresent ) {
       } | ConvertTo-Json -Depth 3
       
       try {
+        Write-Progress -Activity "Exporting files…" -CurrentOperation "triggering export" -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
         $pa = Invoke-RestMethod -Uri $req -Method Post -WebSession $session -Body $exportParams -ContentType application/json
         
         $jobreq = "https://transkribus.eu/TrpServer/rest/jobs/$pa"
         $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
         
+        Write-Progress -Activity "Exporting files…" -CurrentOperation "waiting for export to finish..." -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
         while ($jo.state -ne "FINISHED") {
-          "    waiting for export to finish..."
           Start-Sleep -Seconds 20 
           $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
         }
       
-        # TODO NOTE parameters will be different under Windows (-OutFile)
         $link = $jo.result
-        "  - downloading and expanding"
-        "    - getting $link"
-        #wget $link -nv -O "temp/temp.zip"
-        Invoke-WebRequest -Uri $link -OutFile "temp/temp.zip"
+        Write-Progress -Activity "Exporting files…" -CurrentOperation "downloading from $link" -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
+        Invoke-WebRequest -Uri $link -OutFile "temp/temp.zip" | Out-Null
         
+        Write-Progress -Activity "Exporting files…" -CurrentOperation "Expanding archive…" -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
         # Force to overwrite log.txt...
         Expand-Archive "temp/temp.zip" -DestinationPath temp -Force
         
@@ -351,18 +352,21 @@ if ( $e.isPresent ) {
         $xml = $tempPath + '/' + $name
         $xml + " (Export: " + $exportPath + ")"
         
+        Write-Progress -Activity "Exporting files…" -CurrentOperation "getting or creating TEI" -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
         # Check whether TEI file is > 0 Bytes; if = 0 Bytes, transform from PAGE
         If ((Get-Item $xml).length -eq 0kb) {
           $mets = $tempPath + "/" + $name.Substring(0, 10) + "/mets.xml"
           java -jar Saxon-HE-9.9.1-2.jar -xsl:page2tei-0.xsl -s:$mets -o:$xml
         }
+
+        Copy-Item -Path $xml -Destination $exportPath
       } catch {
         "    Error downloading"
         $req
         $_
       }
     } Else {
-      "  - already up-to-date (last modified on server: $modifiedServer)"
+      Write-Progress -Activity "Exporting files…" -CurrentOperation "already up-to-date (last modified on server: $modifiedServer)" -PercentComplete (100*$i/$documents.Length) -Status "Exporting $docId"
     }
   }
 }
