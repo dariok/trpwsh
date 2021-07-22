@@ -135,7 +135,7 @@ if ( $p.IsPresent ) {
 ########################################################################################################################
 ##### Line Recognition (CitLab Advanced LayoutAnalysis)
 
-if ( $c.IsPresent -and $c.Length -gt 0 ) {
+if ( $c.Length -gt 0 ) {
   $LARequest = "https://transkribus.eu/TrpServer/rest/LA?collId=$collection"
   Invoke-RestMethod -Uri https://transkribus.eu/TrpServer/rest/auth/login -Body "user=$user&pw=$pass" -Method Post -SessionVariable session | Out-Null
 
@@ -147,7 +147,9 @@ if ( $c.IsPresent -and $c.Length -gt 0 ) {
     Default { "" }
   }
 
+  $i = 0
   $cJobs = @()
+  $numAllPages = 0
   $documents | ForEach-Object {
     $docId = $_.docId
     
@@ -156,6 +158,7 @@ if ( $c.IsPresent -and $c.Length -gt 0 ) {
     $pa = Invoke-RestMethod -Uri $pagesReq -Method Get -WebSession $session
     $ps = $pa.pageList.pages | ForEach-Object {
       $pageId = $_.pageId
+      $numAllPages++
       
       "<pages><pageId>$pageId</pageId></pages>"
     }
@@ -175,7 +178,9 @@ if ( $c.IsPresent -and $c.Length -gt 0 ) {
         </params>
       </jobParameters>"
 
-    "Starting line detection for $docId"
+    $i++
+    $pct = 100 * $i / $documents.Length
+    Write-Progress -Activity "Layout Analysis" -CurrentOperation "Document: $docId" -Status "Starting LA" -PercentComplete $pct
     try {
       $newJob = Invoke-RestMethod -Uri $LARequest -Method Post -WebSession $session -Body $jobParams -ContentType application/xml
       
@@ -186,18 +191,22 @@ if ( $c.IsPresent -and $c.Length -gt 0 ) {
     }
   }
 
-  $wait = 20 * $documents.Length
+  $wait = 2 * $numAllPages
   $ts = New-TimeSpan -Seconds $wait
-  "Waiting to allow line detection to finish until " + ((Get-Date) + $ts)
-  #Start-Sleep -Seconds $wait
-  timeout /t $wait
+  $op = "Waiting to allow LA to finish until " + ((Get-Date) + $ts)
+  Write-Progress -Activity "Layout Analysis" -Status $op -PercentComplete 1
+  
+  Start-Sleep -Seconds $wait
+  #timeout /t $wait
 
   $openJobs = Request-Status $cJobs $session
   do {
     $wait = 15 * $openJobs.length
-    "Waiting for another $wait seconds to allow " + $openJobs.length + " LR jobs to finish"
-    #Start-Sleep -Seconds $wait
-    timeout /t $wait
+    $pct = 100 * ( $documents.Length - $openJobs ) / $documents.Length
+    $op = "Waiting for another $wait seconds to allow " + $openJobs.length + " LR jobs to finish"
+    Write-Progress -Activity "Layout Analysis" -Status $op -PercentComplete $pct
+    Start-Sleep -Seconds $wait
+    #timeout /t $wait
   } while ( $openJobs.length -gt 0 )
 }
 
