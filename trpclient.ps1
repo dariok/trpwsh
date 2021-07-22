@@ -25,7 +25,8 @@ param(
     [int] $collection,
   [switch] $j,
   [switch] $p,
-  [switch] $c,
+  [ValidateSet("postcard", "newseye", "greifswald", "default")]
+    [string] $c,
   [switch] $e,
   [int] $h,
   [int] $from,
@@ -134,9 +135,17 @@ if ( $p.IsPresent ) {
 ########################################################################################################################
 ##### Line Recognition (CitLab Advanced LayoutAnalysis)
 
-if ( $c.IsPresent ) {
+if ( $c.IsPresent -and $c.Length -gt 0 ) {
   $LARequest = "https://transkribus.eu/TrpServer/rest/LA?collId=$collection"
   Invoke-RestMethod -Uri https://transkribus.eu/TrpServer/rest/auth/login -Body "user=$user&pw=$pass" -Method Post -SessionVariable session | Out-Null
+
+  $model = switch ( $c ) {
+    "newseye" { "LA_news_onb_att_newseye.pb" }
+    "postcard" { "postcards_aru_c3.pb" }
+    "greifswald" { "LA_alvermann1.pb" }
+    "default" { "" }
+    Default { "" }
+  }
 
   $cJobs = @()
   $documents | ForEach-Object {
@@ -161,7 +170,7 @@ if ( $c.IsPresent ) {
         <params>
           <entry>
             <key>modelName</key>
-            <value>LA_news_onb_att_newseye.pb</value>
+            <value>$model</value>
           </entry>
         </params>
       </jobParameters>"
