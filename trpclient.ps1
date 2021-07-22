@@ -40,26 +40,23 @@ param(
 ########################################################################################################################
 ##### Functions
 function Request-Status {
-    param (
-      [int[]] $jobIds,
-      $session
-    )
-  
-    $openJobs = @()
-    $jobIds | ForEach-Object {
-      $statusRequest = "https://transkribus.eu/TrpServer/rest/jobs/" + $_
-      try {
-        $md = Invoke-RestMethod -Uri $statusRequest -Method Get -WebSession $session
-      } catch {
-        Invoke-RestMethod -Uri https://transkribus.eu/TrpServer/rest/auth/login -Body "user=$user&pw=$pass" -Method Post -SessionVariable session | Out-Null
-        $md = Invoke-RestMethod -Uri $statusRequest -Method Get -WebSession $session
-      }
-  
-      if ( $md.state -ne "FINISHED" -and $md.state -ne "FAILED" ) {
-        $openJobs += $_
-      }
+  param (
+    [int[]] $collection,
+    $session
+  )
+
+  $openJobs = @()
+  ("CREATED", "WAITING", "RUNNING", "PENDING") | ForEach-Object {
+    $statusRequest = "https://transkribus.eu/TrpServer/rest/jobs/list?collId=$collection&status=" + $_
+    $list = Invoke-RestMethod -Method Get -Uri $statusRequest -WebSession $session
+
+    $list | ForEach-Object {
+      $openJobs += $_.jobId
     }
   }
+
+  Return $openJobs
+}
 
 ########################################################################################################################
 $startTime = $(Get-Date)
@@ -86,8 +83,8 @@ $jobList = @()
 ##### get a list of all unfinished jobs
 
 if ( $j.IsPresent ) {
-  ("CREATED", "WAITING", "RUNNING") | ForEach-Object {
-    $statusRequest = "https://transkribus.eu/TrpServer/rest/jobs/list?collId=95080&status=" + $_
+  <#("CREATED", "WAITING", "RUNNING", "PENDING") | ForEach-Object {
+    $statusRequest = "https://transkribus.eu/TrpServer/rest/jobs/list?collId=$collection&status=" + $_
     $list = Invoke-RestMethod -Method Get -Uri $statusRequest -WebSession $session
 
     $list | ForEach-Object {
@@ -96,6 +93,8 @@ if ( $j.IsPresent ) {
   }
 
   $jobList
+  $jobList.Length.ToString() + " open jobs in collection " + $collection#>
+  $jobList = Request-Status $collection $session
   $jobList.Length.ToString() + " open jobs in collection " + $collection
 }
 
@@ -216,11 +215,18 @@ if ( $c.Length -gt 0 ) {
 if ( $h.length -eq 1 -and $h -gt 0 ) {
   Invoke-RestMethod -Uri https://transkribus.eu/TrpServer/rest/auth/login -Body "user=$user&pw=$pass" -Method Post -SessionVariable session | Out-Null
 
+  $resp = Invoke-WebRequest -Uri "https://transkribus.eu/TrpServer/rest/recognition/$collection/list" -WebSession $session
+  $models = [xml]$resp.Content
+  $model = $models.trpHtrs.trpHtr | Where-Object -Property "htrId" -eq $h
+
   $numAllPages = 0
+  $i = 0
   $hJobs = @()
   $documents | ForEach-Object {
     $docId = $_.docId
-    "Starting HTR for $docId"
+    $i++
+    $pct = 100 * $i / $documents.Length
+    Write-Progress -Activity "Text Recognition" -CurrentOperation "Document: $docId" -Status "Starting HTR" -PercentComplete $pct
 
     $pagesReq = "https://transkribus.eu/TrpServer/rest/collections/$collection/$docId/fulldoc"
     $pa = Invoke-RestMethod -Uri $pagesReq -Method Get -WebSession $session
@@ -228,6 +234,7 @@ if ( $h.length -eq 1 -and $h -gt 0 ) {
     $numAllPages += $numPages
     $ps = $pa.pageList.pages | ForEach-Object {
       $pageId = $_.pageId
+      $numAllPages++
       
       "<pages><pageId>$pageId</pageId></pages>"
     }
@@ -236,8 +243,13 @@ if ( $h.length -eq 1 -and $h -gt 0 ) {
         <docId>$docId</docId>
         <pageList>$ps</pageList>
     </documentSelectionDescriptor>"
-    $jobRequest = "https://transkribus.eu/TrpServer/rest/recognition/$collection/$h/htrCITlab"
 
+    $jobRequest = switch  ( $model.Provider ) {
+      "CITlabPlus" { "https://transkribus.eu/TrpServer/rest/recognition/$collection/$h/htrCITlab" }
+      "CITlab" { "https://transkribus.eu/TrpServer/rest/recognition/$collection/$h/htrCITlab" }
+      "PyLaia" { "https://transkribus.eu/TrpServer/rest/pylaia/$collection/$h/recognition" }
+    }
+    
     try {
       $newJob = Invoke-RestMethod -Uri $jobRequest -Method Post -WebSession $session -Body $jobParams -ContentType application/xml
       $hJobs += $newJob
@@ -247,16 +259,20 @@ if ( $h.length -eq 1 -and $h -gt 0 ) {
     }
   }
 
-  $wait = 30 * $documents.Length
+  $wait = 2 * $numAllPages
   $ts = New-TimeSpan -Seconds $wait
-  "Waiting to allow text recognition to finish until " + ((Get-Date) + $ts)
+  $status = "Waiting to allow text recognition to finish until " + ((Get-Date) + $ts)
+  Write-Progress -Activity "Text Recognition" -Status $status -PercentComplete 1
   Start-Sleep -Seconds $wait
 
-  $openJobs = Request-Status $hJobs $session
+  $openJobs = Request-Status $collection $session
   do {
     $wait = 15 * $openJobs.length
-    "Waiting for another $wait seconds to allow " + $openJobs.length + " TR jobs to finish"
+    $pct = 100 * ( $documents.Length - $openJobs.Length ) / $documents.Length
+    $status = "Waiting for another $wait seconds to allow " + $openJobs.length + " TR jobs to finish"
+    Write-Progress -Activity "Text Recognition" -Status $status -PercentComplete $pct
     Start-Sleep -Seconds $wait
+    $openJobs = Request-Status $collection $session
   } while ( $openJobs.length -gt 0 )
 }
 
