@@ -371,13 +371,11 @@ if ( $e.isPresent ) {
         $pa = Invoke-RestMethod -Uri $req -Method Post -WebSession $session -Body $exportParams -ContentType application/json
         
         $jobreq = "https://transkribus.eu/TrpServer/rest/jobs/$pa"
-        $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
-        
         Write-Progress -Activity $act -CurrentOperation "waiting for export to finish..." -PercentComplete $pct -Status $status
-        while ($jo.state -ne "FINISHED") {
-          Start-Sleep -Seconds 20 
+        Do {
+          Start-Sleep -Seconds 10 
           $jo = Invoke-RestMethod -Uri $jobreq -Method Get -WebSession $session -Headers @{"Accept"="application/json"}
-        }
+        } while ( $jo.state -ne "FINISHED" -and $jo.state -ne "FAILED" )
       
         $link = $jo.result
         Write-Progress -Activity $act -CurrentOperation "downloading from $link" -PercentComplete $pct -Status $status
