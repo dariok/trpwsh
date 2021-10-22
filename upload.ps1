@@ -16,10 +16,10 @@
 #>
 
 param(
-   [Parameter(Mandatory=$true)] [string] $processId,
+   [Parameter(Mandatory=$true)] [string] $projectID,
+   [Parameter(Mandatory=$true)] [string] $issueDate,
    [Parameter(Mandatory=$true)] [string] $imagePath,
-   [Parameter(Mandatory=$true)] [string] $collection,
-   [Parameter(Mandatory=$true)] [string] $documentName,
+   [Parameter(Mandatory=$true)] [string] $collectionID,
    $transkribusSecrets
 )
 
@@ -44,7 +44,8 @@ $parms = @{ "Uri" = "https://transkribus.eu/TrpServer/rest/auth/login";
          }
 Invoke-RestMethod @parms | Out-Null
 
-$jobList = "https://transkribus.eu/TrpServer/rest/jobs/list?collId=$collectionID"
+$documentName = "$projectID-$issueDate"
+
 $jobRequest = "https://transkribus.eu/TrpServer/rest/jobs/"
 ########################################################################################################################
 
